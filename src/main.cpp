@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <FreeRTOS.h>
-#include "LittleFS.h"
 
 // ##############################################################################################################
 // WiFi Manager
@@ -29,8 +28,6 @@ const char *password = "EnergieTestPass";
 #include <JCA_EM_Measuring.h>
 AsyncWebServer ApiServer (81);
 AsyncWebSocket WebSocket("/ws");
-TaskHandle_t HandleReadData;
-TaskHandle_t HandleAnalysData;
 
 void UpdateCallback(JsonObject Data) {
   if (WebSocket.count() > 0) {
@@ -43,9 +40,7 @@ void UpdateCallback(JsonObject Data) {
 void onRestGetTasks(AsyncWebServerRequest *request) {
   JsonDocument JDoc;
   String MessageString;
-  JDoc["TaskRead"] = eTaskGetState (HandleReadData);
-  JDoc["TaskAnalyse"] = eTaskGetState (HandleAnalysData);
-
+  JDoc["TakCount"] = uxTaskGetNumberOfTasks ();
   serializeJson (JDoc, MessageString);
   request->send (200, "application/json", MessageString);
 }
@@ -57,14 +52,8 @@ void onRestGetTasks(AsyncWebServerRequest *request) {
 void setup (){
   WiFi.mode (WIFI_STA);
   delay (1000);
-  Serial.begin (115200);
+//  Serial.begin (115200);
   Serial.println ("Startup)");
-
-  //----------------------------
-  // Filesystem
-  if(!LittleFS.begin(true)){
-    Serial.println("An Error has occurred while mounting LittleFS");
-  }
 
   //----------------------------
   // WiFi Manager
@@ -89,40 +78,15 @@ void setup (){
   // WebServer
   ApiServer.on ("/api/data", HTTP_GET, JCA::EM::onRestGetData);
   ApiServer.on ("/api/detail", HTTP_GET, JCA::EM::onRestGetDetail);
+  ApiServer.on ("/api/config", HTTP_GET, JCA::EM::onRestGetConfig);
   ApiServer.on ("/api/tasks", HTTP_GET, onRestGetTasks);
-  ApiServer.on ("/api/cmd", HTTP_POST, JCA::EM::onRestPostCmd);
+  ApiServer.on ("/api/cmd", HTTP_POST, JCA::EM::onRestPostCmd, NULL , JCA::EM::onRestPostBody);
   ApiServer.onNotFound (JCA::EM::onWebNotFound);
   ApiServer.begin ();
 
   //----------------------------
   // EnergyMeter
-  int CurrentPins[JCA_EM_MAX_CURRENT] = {9,5,6,4,7,3,1,2};
-  JCA::EM::definePins(8, CurrentPins);
   JCA::EM::addWebSocketCallback(UpdateCallback);
-
-  //----------------------------
-  // Tasks
-  xTaskCreatePinnedToCore(
-    JCA::EM::taskReadData,
-    "ReadData",
-    10000,
-    NULL,
-    1000,
-    &HandleReadData,
-    1);
-  xTaskCreatePinnedToCore(
-    JCA::EM::taskAnalysData,
-    "ShowData",
-    10000,
-    NULL,
-    1000,
-    &HandleAnalysData,
-    0);
-
-//  char Buffer[20000];
-//  vTaskList(Buffer);
-//  Serial.println("TASK LIST");
-//  Serial.println(Buffer);
 
   Serial.print ("Tasks:");
   Serial.println (uxTaskGetNumberOfTasks ());
@@ -132,6 +96,7 @@ void setup (){
 // LOOP
 // ##############################################################################################################
 void loop () {
+  //----------------------------
   // WLAN-Manager
   digitalWrite (WM_STATE, PortalState != OFF);
   if (PortalState == INIT) {
@@ -169,4 +134,8 @@ void loop () {
       TriggerDone = false;
     }
   }
+
+  //----------------------------
+  // Energy Meter
+  JCA::EM::loop();
 }

@@ -2,144 +2,351 @@
 
 namespace JCA {
   namespace EM {
-    extern InputConfig VoltageInput;
-    extern PowerInput CurrentInputs[JCA_EM_MAX_CURRENT];
-    extern int ActInput;
+    extern DeviceConfig_T DeviceConfig;
+    extern DeviceCounter_T DeviceCounter;
+    extern PowerInput_T PowerInputs[JCA_EM_CURRENT_SENSES];
     extern OperMode_E OperMode;
+    extern bool InitDone;
     extern bool CalDone;
-    extern uint32_t AnalyseUpdate;
+    extern float Cal_VoltageRMS;
+    extern float Cal_CurrentRMS;
+    extern uint32_t LastUpdate;
     extern JsonObjectCallback cbWebSocket;
 
-    void taskReadData (void *_TaskParameters) {
-      const TickType_t DelayTicks = 100U / portTICK_PERIOD_MS;
-      // TaskLoop
-      while (true) {
-        // Prüfen ob der Eingang bereit ist
-        if (CurrentInputs[ActInput].Config.Pin != 0 && !CurrentInputs[ActInput].RawData.Done) {
-          uint16_t VoltagePin = VoltageInput.Pin;
-          uint16_t CurrentPin = CurrentInputs[ActInput].Config.Pin;
-          int VoltageOffset = VoltageInput.Offset;
-          int CurrentOffset = CurrentInputs[ActInput].Config.Offset;
-          uint16_t Counter = 0;
-          uint32_t SampleRate = JCA_EM_PERIODE_US / JCA_EM_SAMPLES;
-          uint32_t StartRead = micros ();
-          uint32_t LastRead = StartRead - SampleRate;
-          uint32_t ActMicros = StartRead;
-          while (Counter <= JCA_EM_SAMPLEPERIODES * JCA_EM_SAMPLES) {
-            if (ActMicros - LastRead >= SampleRate) {
-              CurrentInputs[ActInput].RawData.Voltage[Counter] = analogRead (VoltagePin);
-              CurrentInputs[ActInput].RawData.Current[Counter] = analogRead (CurrentPin);
-              CurrentInputs[ActInput].RawData.TimeMicros[Counter] = ActMicros - StartRead;
+    void taskGetZero (void *_TaskParameters) {
+      uint32_t SampleCount = JCA_EM_CAL_TIME / JCA_EM_CAL_RATE;
+      uint64_t SumValue;
+      uint16_t Offset;
+      int16_t MeanSamples[JCA_EM_MEAN_SAMPLES];
+      uint8_t Pin;
+      uint8_t Index;
+      uint16_t Counter;
+      unsigned long ActMicros;
+      unsigned long LastRead;
+      bool LastPlus;
+      bool ActPlus;
+
+      InitDone = false;
+      CalDone = false;
+      //----------------------------
+      // Spannungseingänge Nullen
+      for (int i = 0; i < JCA_EM_VOLTAGE_SENSES; i++) {
+        Pin = DeviceConfig.VoltageInputs[i].Pin;
+        if (Pin > 0) {
+          // Messwerte aufnehmen und Summe bilden
+          SumValue = 0;
+          Counter = 0;
+          ActMicros = micros ();
+          LastRead = ActMicros - JCA_EM_CAL_RATE;
+          while (Counter < SampleCount) {
+            if (ActMicros - LastRead >= JCA_EM_CAL_RATE) {
+              SumValue += (uint64_t)analogRead (Pin);
               Counter++;
               LastRead = ActMicros;
             }
             ActMicros = micros ();
           }
-          CurrentInputs[ActInput].RawData.StartRead = StartRead;
-          CurrentInputs[ActInput].RawData.Counter = Counter;
-          CurrentInputs[ActInput].RawData.Done = true;
-          vTaskDelay (DelayTicks);
-        } else {
-          vTaskDelay (DelayTicks / 10);
+
+          // Mittelwert berechnen und als Nullpunkt speichern
+          DeviceConfig.VoltageInputs[i].Offset = (uint16_t)(SumValue / (uint64_t)SampleCount);
+
+          Serial.print ("Zero Voltage PIN:");
+          Serial.println (Pin);
+
+          // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
+          vTaskDelay (200U);
+        }
+      }
+
+      //----------------------------
+      // Stromeingänge Nullen
+      for (int i = 0; i < JCA_EM_CURRENT_SENSES; i++) {
+        Pin = DeviceConfig.CurrentInputs[i].Pin;
+        if (Pin > 0) {
+          // Messwerte aufnehmen und Summe bilden
+          SumValue = 0;
+          Counter = 0;
+          ActMicros = micros ();
+          LastRead = ActMicros - JCA_EM_CAL_RATE;
+          while (Counter < SampleCount) {
+            if (ActMicros - LastRead >= JCA_EM_CAL_RATE) {
+              SumValue += (uint64_t)analogRead (Pin);
+              Counter++;
+              LastRead = ActMicros;
+            }
+            ActMicros = micros ();
+          }
+
+          // Mittelwert berechnen und als Nullpunkt speichern
+          DeviceConfig.CurrentInputs[i].Offset = (uint16_t)(SumValue / (uint64_t)SampleCount);
+
+          Serial.print ("Zero Current PIN:");
+          Serial.println (Pin);
+
+          // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
+          vTaskDelay (200U);
+        }
+      }
+
+      //----------------------------
+      // Ferquenz ermitteln
+      if (DeviceConfig.PeriodMicros == 0) {
+        Serial.println("Start Frequency");
+        Pin = 0;
+        for (int i = 0; i < JCA_EM_VOLTAGE_SENSES; i++) {
+          if (DeviceConfig.VoltageInputs[i].Pin > 0) {
+            Pin = DeviceConfig.VoltageInputs[i].Pin;
+            Offset = DeviceConfig.VoltageInputs[i].Offset;
+            break;
+          }
         }
 
-        // Nächsten Messpunkt anwählen
-        ActInput++;
-        if (ActInput >= JCA_EM_MAX_CURRENT || ActInput < 0) {
-          ActInput = 0;
+        if (Pin > 0) {
+          // Analyse Array füllen
+          for (int i = 0; i < JCA_EM_MEAN_SAMPLES; i++) {
+              MeanSamples[i] = analogRead (Pin) - Offset;
+          }
+          ActPlus = getMeanValue(MeanSamples, JCA_EM_MEAN_SAMPLES) > 0;
+          LastPlus = ActPlus;
+          Counter = 0;
+          Index = 0;
+          
+          // Nulldruchgänge ermitteln
+          while (Counter <= JCA_EM_FREQ_PERIODES) {
+            MeanSamples[Index] = analogRead (Pin) - Offset;
+            ActPlus = getMeanValue (MeanSamples, JCA_EM_MEAN_SAMPLES) > 0;
+            if (!LastPlus && ActPlus) {
+              // Nulldurchgang erkannt
+              if (Counter == 0) {
+                ActMicros = micros();
+              }
+              Counter++;
+            }
+            LastPlus = ActPlus;
+            Index++;
+            if (Index >= JCA_EM_MEAN_SAMPLES) {
+              Index = 0;
+            }
+          }
+
+          // Periodendauer berechnen
+          DeviceConfig.PeriodMicros = (micros() - ActMicros) / JCA_EM_FREQ_PERIODES;
+          DeviceConfig.SampleRate = DeviceConfig.PeriodMicros / JCA_EM_SAMPLES_PERPEROIDE;
+        }
+        Serial.println("Done Frequency");
+      }
+
+      InitDone = true;
+      configSave();
+      vTaskDelete(NULL);
+    }
+
+    void taskCalibrate (void *_TaskParameters) {
+      uint32_t SampleCount = JCA_EM_CAL_PERIODES * JCA_EM_SAMPLES_PERPEROIDE;
+      int64_t SumValue;
+      int64_t ActValue;
+      uint16_t Offset;
+      uint8_t Pin;
+      uint8_t Index;
+      uint16_t Counter;
+      unsigned long ActMicros;
+      unsigned long LastRead;
+
+      CalDone = false;
+      //----------------------------
+      // Spannungseingänge kallibrieren
+      for (int i = 0; i < JCA_EM_VOLTAGE_SENSES; i++) {
+        Pin = DeviceConfig.VoltageInputs[i].Pin;
+        if (Pin > 0) {
+          // Messwerte aufnehmen und Quadradsumme bilden
+          Offset = DeviceConfig.VoltageInputs[i].Offset;
+          SumValue = 0;
+          Counter = 0;
+          ActMicros = micros ();
+          LastRead = ActMicros - DeviceConfig.SampleRate;
+          while (Counter < SampleCount) {
+            if (ActMicros - LastRead >= DeviceConfig.SampleRate) {
+              ActValue = (int64_t)analogRead (Pin) - Offset;
+              SumValue += sq(ActValue);
+              Counter++;
+              LastRead = ActMicros;
+            }
+            ActMicros = micros ();
+          }
+
+          // RMS-Wert berechnen und Kallibrierungsfaktor speichern speichern
+          DeviceConfig.VoltageInputs[i].Factor = Cal_VoltageRMS / sqrt((float)SumValue / (float)SampleCount);
+
+          // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
+          vTaskDelay (200U);
+        }
+      }
+
+      //----------------------------
+      // Stromeingänge kallibrieren
+      for (int i = 0; i < JCA_EM_CURRENT_SENSES; i++) {
+        Pin = DeviceConfig.CurrentInputs[i].Pin;
+        if (Pin > 0) {
+          // Messwerte aufnehmen und Quadradsumme bilden
+          Offset = DeviceConfig.CurrentInputs[i].Offset;
+          SumValue = 0;
+          Counter = 0;
+          ActMicros = micros ();
+          LastRead = ActMicros - DeviceConfig.SampleRate;
+          while (Counter < SampleCount) {
+            if (ActMicros - LastRead >= DeviceConfig.SampleRate) {
+              ActValue = (int64_t)analogRead (Pin) - Offset;
+              SumValue += sq(ActValue);
+              Counter++;
+              LastRead = ActMicros;
+            }
+            ActMicros = micros ();
+          }
+
+          // RMS-Wert berechnen und Kallibrierungsfaktor speichern speichern
+          DeviceConfig.CurrentInputs[i].Factor = Cal_CurrentRMS / sqrt((float)SumValue / (float)SampleCount);
+
+          // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
+          vTaskDelay (200U);
+        }
+      }
+
+      CalDone = true;
+      configSave ();
+      vTaskDelete (NULL);
+    }
+
+    void taskReadData (void *_TaskParameters) {
+      uint8_t PinCurrent;
+      uint8_t PinVoltage;
+      uint16_t OffsetCurrent;
+      uint16_t OffsetVoltage;
+      float FactorCurrent;
+      float FactorVoltage;
+      uint8_t MapIndex;
+      uint16_t Counter;
+      unsigned long ActMicros;
+      unsigned long LastRead;
+
+      while (true) {
+        uint16_t Current[JCA_EM_SAMPLECOUNT];
+        uint16_t Voltage[JCA_EM_SAMPLECOUNT];
+
+        //----------------------------
+        // Strom/Spannungswerte einlesen
+        for (int i = 0; i < JCA_EM_CURRENT_SENSES; i++) {
+          // Messpunkt Konfig prüfen
+          MapIndex = DeviceConfig.CurrentMapping[i];
+          if (MapIndex >= 0 && MapIndex < JCA_EM_VOLTAGE_SENSES) {
+            PinVoltage = DeviceConfig.VoltageInputs[MapIndex].Pin;
+          } else {
+            PinVoltage = 0;
+          }
+          PinCurrent = DeviceConfig.CurrentInputs[i].Pin;
+          PowerInputs[i].Valid = PinVoltage > 0 && PinCurrent > 0;
+          if (PowerInputs[i].Valid) {
+            // Messwerte aufnehmen und Quadradsumme bilden
+            Counter = 0;
+            ActMicros = micros ();
+            LastRead = ActMicros - DeviceConfig.SampleRate;
+            PowerInputs[i].RawData.StartRead = ActMicros;
+            while (Counter < JCA_EM_SAMPLECOUNT) {
+              if (ActMicros - LastRead >= DeviceConfig.SampleRate) {
+                Current[Counter] = analogRead(PinCurrent);
+                Voltage[Counter] = analogRead(PinVoltage);
+                Counter++;
+                LastRead = ActMicros;
+              }
+              ActMicros = micros ();
+            }
+          }
+
+          // Daten in Speicher umkopieren und Werte berechnen
+          std::memcpy(PowerInputs[i].RawData.Current, Current, sizeof(Current));
+          std::memcpy(PowerInputs[i].RawData.Voltage, Voltage, sizeof(Voltage));
+          calcData(i);
+
+          // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
+          vTaskDelay (200U);
         }
       }
     }
 
-    void taskAnalysData (void *_TaskParameters) {
-      const TickType_t DelayTicks = AnalyseUpdate / portTICK_PERIOD_MS;
-      bool StepDone;
-      bool AnyDone;
+    void loop () {
+      bool DoUpdate = false;
       JsonDocument JDoc;
-      while (true) {
-        JDoc.clear ();
-        JsonObject Data = JDoc.to<JsonObject> ();
-        // Prüfen ob Kalibrierung erfolgt ist
-        Data["mode"] = OperMode;
-        switch (OperMode) {
-          case OperMode_E::Idle:
-            for (int i = 0; i < JCA_EM_MAX_CURRENT; i++) {
-              CurrentInputs[i].RawData.Done = false;
-            }
-            fileRead();
-            if (CalDone) {
-              OperMode = OperMode_E::ReadValue;
-            }
+      JsonObject JData = JDoc["data"].to<JsonObject>();
+      unsigned long ActMillis = millis();
 
-            break;
+      // Prüfen ob Kalibrierung erfolgt ist
+      switch (OperMode) {
+        case OperMode_E::Idle:
+          // gespeicherte Daten einlasen
+          dataRead();
 
-          case OperMode_E::ReadZero :
-            // Nullpunkt ermitteln, Speisung über USB und Stromumformer nicht verbunden.
-            StepDone = true;
-            // Prüfen ob alle EIngänge die Messung abgeschlossen haben
-            for (int i = 0; i < JCA_EM_MAX_CURRENT; i++) {
-              if (CurrentInputs[i].Config.Pin > 0) {
-                if (!CurrentInputs[i].RawData.Done) {
-                  StepDone = false;
-                }
-              }
-            }
+          if (!InitDone) {
+            OperMode = OperMode_E::WaitZero;
+          } else if (!CalDone) {
+            OperMode = OperMode_E::WaitCalibration;
+          } else {
+            OperMode = OperMode_E::ReadValue;
+            JData["mode"] = OperMode;
+            startReadTask (JData);
+            cbWebSocket(JData);
+          }
+          break;
 
-            if (StepDone) {
-              OperMode = OperMode_E::DoneZero;
-            }
+        case OperMode_E::WaitZero :
+          // Warten auf Nullen befehlt, der Task wird über ein Kommando gestartet
+          // - Speisung über USB und Stromumformer nicht verbunden.
+          DoUpdate = true;
+          break;
 
-            break;
+        case OperMode_E::ReadZero :
+          // Nullpunkt ermitteln Warten bis initalisierung abgeschlossen ist
+          if (InitDone) {
+            OperMode = OperMode_E::WaitCalibration;
+          } else {
+            DoUpdate = true;
+          }
 
-          case OperMode_E::DoneZero :
-            // Warten dass Nullpunkte gespeichert werden
+          break;
 
-            break;
+        case OperMode_E::WaitCalibration:
+          // Warten auf Kalibrierung befehlt, der Task wird über ein Kommando gestartet
+          // - Netzspannung muss anliegen und es muss ein Definierte Strom fliessen.
+          DoUpdate = true;
+          break;
 
-          case OperMode_E::ReadCalibration :
-            // Messwerte für Kallibrierung aufzeichnen, Netzspannung muss anliegen und es muss ein Definierte Strom fliessen
-            StepDone = true;
-            // Prüfen ob alle EIngänge die Messung abgeschlossen haben
-            for (int i = 0; i < JCA_EM_MAX_CURRENT; i++) {
-              if (CurrentInputs[i].Config.Pin > 0) {
-                if (!CurrentInputs[i].RawData.Done) {
-                  StepDone = false;
-                }
-              }
-            }
+        case OperMode_E::ReadCalibration:
+          // Nullpunkt ermitteln Warten bis initalisierung abgeschlossen ist
+          if (CalDone) {
+            OperMode = OperMode_E::ReadValue;
+            startReadTask(JData);
+            cbWebSocket(JData);
+          } else {
+            DoUpdate = true;
+          }
 
-            if (StepDone){
-              OperMode = OperMode_E::DoneCalibration;
-            }
+          break;
 
-            break;
+        case OperMode_E::ReadValue :
+          // Messdaten senden
+          DoUpdate = true;
+          break;
 
-          case OperMode_E::DoneCalibration :
-            // Warten dass Kalibrierdaten gespeichert werden
-            break;
+        default:
+          OperMode = OperMode_E::Idle;
 
-          case OperMode_E::ReadValue :
-            // Zyklisch die Werte der abgeschlossenen Messungen berechen0
-            calcData ();
-            Data["type"] = "Value";
-            addData(Data);
-            break;
+          break;
+      }
 
-          case OperMode_E::ReadRaw :
-            // Nur Rohwerte lesen, keine Nachbearbeitung
-            Data["type"] = "Raw";
-            addDetail(Data);
-            break;
-
-          default:
-            OperMode = OperMode_E::Idle;
-
-            break;
-        }
-        // Callback Data
-        cbWebSocket (Data);
-        // Tast Sleep
-        vTaskDelay (DelayTicks);
+      // Update senden
+      if (ActMillis - LastUpdate >= DeviceConfig.UpdateMillis && DoUpdate) {
+        JData["mode"] = OperMode;
+        addData(JData);
+        cbWebSocket(JData);
+        LastUpdate = ActMillis;
       }
     }
   }

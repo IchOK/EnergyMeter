@@ -2,120 +2,81 @@
 
 namespace JCA {
   namespace EM {
-    extern InputConfig VoltageInput;
-    extern PowerInput CurrentInputs[JCA_EM_MAX_CURRENT];
-    extern bool ZeroDone;
-    extern bool CalDone;
-    extern float Cal_VoltageRMS;
-    extern float Cal_CurrentRMS;
+    extern Preferences DataStorage;
+    extern DeviceConfig_T DeviceConfig;
+    extern DeviceCounter_T DeviceCounter;
+    extern PowerInput_T PowerInputs[JCA_EM_CURRENT_SENSES];
 
-    void calcSaveZero (JsonObject _JData) {
-      for (int i = 0; i < JCA_EM_MAX_CURRENT; i++) {
-        if (CurrentInputs[i].Config.Pin > 0) {
-          uint32_t RawU = 0;
-          uint32_t RawI = 0;
-          for (int x = 0; x < CurrentInputs[i].RawData.Counter - 1; x++) {
-            RawU += CurrentInputs[i].RawData.Voltage[x];
-            RawI += CurrentInputs[i].RawData.Current[x];
-          }
-          VoltageInput.Offset = RawU / CurrentInputs[i].RawData.Counter;
-          CurrentInputs[i].Config.Offset = RawI / CurrentInputs[i].RawData.Counter;
-
-          JsonObject ChannelObj = _JData["Channel_" + String (i + 1)].to<JsonObject>();
-          ChannelObj["VoltageOffset"] = VoltageInput.Offset;
-          ChannelObj["CurrentOffset"] = CurrentInputs[i].Config.Offset;
-        }
+    int16_t getMeanValue(int16_t Samples[], uint8_t Count) {
+      int32_t Sum = 0;
+      for (int i = 0; i < Count; i++) {
+        Sum += Samples[i];
       }
-      ZeroDone = true;
-      // Save Date to File
-      fileSave();
+      return Sum /Count;
     }
 
-    void calcSaveCalibration (JsonObject _JData) {
-      for (int i=0; i<JCA_EM_MAX_CURRENT; i++) {
-        if (CurrentInputs[i].RawData.Done && CurrentInputs[i].Config.Pin > 0) {
-          // Faktor für Spannungsmessung errechnen
-          float Usum = 0.0;
-          float Isum = 0.0;
-          float DeltaT;
-          int LastIndex = CurrentInputs[i].RawData.Counter - 1;
-          for (int x = 0; x < LastIndex; x++) {
-            DeltaT = float(CurrentInputs[i].RawData.TimeMicros[x+1] - CurrentInputs[i].RawData.TimeMicros[x]);
-            Usum += sq(float((CurrentInputs[i].RawData.Voltage[x] + CurrentInputs[i].RawData.Voltage[x+1]) / 2 - VoltageInput.Offset)) * DeltaT;
-            Isum += sq(float((CurrentInputs[i].RawData.Current[x] + CurrentInputs[i].RawData.Current[x+1]) / 2 - CurrentInputs[i].Config.Offset)) * DeltaT;
-          }
+    void calcData(uint8_t _Channel) {
+      uint8_t PinCurrent;
+      uint8_t PinVoltage;
+      uint16_t OffsetCurrent;
+      uint16_t OffsetVoltage;
+      float FactorCurrent;
+      float FactorVoltage;
+      uint8_t MapIndex;
 
-          DeltaT = float(CurrentInputs[i].RawData.TimeMicros[LastIndex] - CurrentInputs[i].RawData.Voltage[0]);
-          VoltageInput.Factor = Cal_VoltageRMS / sqrt (Usum / DeltaT);
-          CurrentInputs[i].Config.Factor = Cal_CurrentRMS / sqrt(Isum / DeltaT);
-
-          JsonObject ChannelObj = _JData["Channel_" + String (i + 1)].to<JsonObject>();
-          ChannelObj["VoltageFactor"] = VoltageInput.Factor;
-          ChannelObj["CurrentFactor"] = CurrentInputs[i].Config.Factor;
-        }
-      }
-      CalDone = true;
-      // Save Data to File
-      fileSave();
-    }
-
-    void calcData() {
       float U;  // Spannung am Messpunkt
       float I;  // Strom am Messpunkt
       float Usum; // Aufsummierte quadratische Spannung
       float Isum; // Aufsummierter quadratischer Strom
       float Psum; // Aufsummierte Wirkleistung
-      for (int i = 0; i < JCA_EM_MAX_CURRENT; i ++) {
-        if (CurrentInputs[i].RawData.Done) {
-          Usum = 0.0;
-          Isum = 0.0;
-          Psum = 0.0;
-          float DeltaT;
-          int LastIndex = CurrentInputs[i].RawData.Counter - 1;
-          for (int x = 0; x < LastIndex; x++) {
-            DeltaT = float(CurrentInputs[i].RawData.TimeMicros[x+1] - CurrentInputs[i].RawData.TimeMicros[x]);
-            U = float((CurrentInputs[i].RawData.Voltage[x] + CurrentInputs[i].RawData.Voltage[x+1]) / 2 - VoltageInput.Offset) * VoltageInput.Factor;
-            I = float((CurrentInputs[i].RawData.Current[x] + CurrentInputs[i].RawData.Current[x+1]) / 2 - CurrentInputs[i].Config.Offset) * CurrentInputs[i].Config.Factor;
-            Usum += sq(U * DeltaT);
-            Isum += sq(I * DeltaT);
-            Psum += U * I * DeltaT;
-          }
+      
+      if (PowerInputs[_Channel].Valid) {
+        MapIndex = DeviceConfig.CurrentMapping[_Channel];
+        OffsetVoltage = DeviceConfig.VoltageInputs[MapIndex].Offset;
+        FactorVoltage = DeviceConfig.VoltageInputs[MapIndex].Factor;
+        OffsetCurrent = DeviceConfig.CurrentInputs[_Channel].Offset;
+        FactorCurrent = DeviceConfig.CurrentInputs[_Channel].Factor;
 
-          DeltaT = float(CurrentInputs[i].RawData.TimeMicros[LastIndex] - CurrentInputs[i].RawData.Voltage[0]);
-          CurrentInputs[i].Data.VoltageRMS = sqrt(Usum / DeltaT);
-          CurrentInputs[i].Data.CurrentRMS = sqrt(Isum / DeltaT);
-          CurrentInputs[i].Data.Power = CurrentInputs[i].Data.VoltageRMS * CurrentInputs[i].Data.CurrentRMS;
-          CurrentInputs[i].Data.PowerActiv = Psum / DeltaT;
-          CurrentInputs[i].Data.PowerReactiv = sqrt(sq(CurrentInputs[i].Data.Power) - sq(CurrentInputs[i].Data.PowerActiv));
-          CurrentInputs[i].Data.PowerFactor = CurrentInputs[i].Data.PowerActiv / CurrentInputs[i].Data.Power;
-          CurrentInputs[i].Data.Done = true;
-
-          // Energie zählen
-          if (CurrentInputs[i].RawData.FirstDone) {
-            float Factor = float(CurrentInputs[i].RawData.StartRead - CurrentInputs[i].RawData.LastRead) / 3600.0 / 1000.0 / 1000.0;
-            if (CurrentInputs[i].Data.PowerActiv > 0.0) {
-              CurrentInputs[i].Counter.PartImport += CurrentInputs[i].Data.PowerActiv * Factor;
-              if (CurrentInputs[i].Counter.PartImport >= 1.0) {
-                uint32_t PartAdd = (uint32_t) CurrentInputs[i].Counter.PartImport;
-                CurrentInputs[i].Counter.Import += PartAdd;
-                CurrentInputs[i].Counter.PartImport -= (float)PartAdd;
-              }
-            }
-            if (CurrentInputs[i].Data.PowerActiv < 0.0) {
-              CurrentInputs[i].Counter.PartExport += CurrentInputs[i].Data.PowerActiv * Factor;
-              if (CurrentInputs[i].Counter.PartExport >= 1.0) {
-                uint32_t PartAdd = (uint32_t) CurrentInputs[i].Counter.PartExport;
-                CurrentInputs[i].Counter.Export += PartAdd;
-                CurrentInputs[i].Counter.PartExport -= (float)PartAdd;
-              }
-            }
-          }
-          CurrentInputs[i].RawData.FirstDone = true;
-          CurrentInputs[i].RawData.LastRead = CurrentInputs[i].RawData.StartRead;
-
-          // Messung wieder freigeben
-          CurrentInputs[i].RawData.Done = false;
+        Usum = 0.0;
+        Isum = 0.0;
+        Psum = 0.0;
+        for (int x = 0; x < JCA_EM_SAMPLECOUNT; x++) {
+          U = float(PowerInputs[_Channel].RawData.Voltage[x] - OffsetVoltage) * FactorVoltage;
+          I = float(PowerInputs[_Channel].RawData.Current[x] - OffsetCurrent) * FactorCurrent;
+          Usum += sq(U);
+          Isum += sq(I);
+          Psum += U * I;
         }
+
+        PowerInputs[_Channel].Data.VoltageRMS = sqrt (Usum / JCA_EM_SAMPLECOUNT);
+        PowerInputs[_Channel].Data.CurrentRMS = sqrt (Isum / JCA_EM_SAMPLECOUNT);
+        PowerInputs[_Channel].Data.Power = PowerInputs[_Channel].Data.VoltageRMS * PowerInputs[_Channel].Data.CurrentRMS;
+        PowerInputs[_Channel].Data.PowerActiv = Psum / JCA_EM_SAMPLECOUNT;
+        PowerInputs[_Channel].Data.PowerReactiv = sqrt(sq(PowerInputs[_Channel].Data.Power) - sq(PowerInputs[_Channel].Data.PowerActiv));
+        PowerInputs[_Channel].Data.PowerFactor = PowerInputs[_Channel].Data.PowerActiv / PowerInputs[_Channel].Data.Power;
+
+        // Energie zählen
+        if (PowerInputs[_Channel].Data.FirstDone) {
+          float Factor = float(PowerInputs[_Channel].RawData.StartRead - PowerInputs[_Channel].Data.LastRead) / 3600.0 / 1000.0 / 1000.0;
+          if (PowerInputs[_Channel].Data.PowerActiv > 0.0) {
+            PowerInputs[_Channel].Data.PartImport += PowerInputs[_Channel].Data.PowerActiv * Factor;
+            if (PowerInputs[_Channel].Data.PartImport >= 1.0) {
+              uint32_t PartAdd = (uint32_t) PowerInputs[_Channel].Data.PartImport;
+              DeviceCounter.Counters[_Channel].Import += PartAdd;
+              PowerInputs[_Channel].Data.PartImport -= (float)PartAdd;
+            }
+          }
+          if (PowerInputs[_Channel].Data.PowerActiv < 0.0) {
+            PowerInputs[_Channel].Data.PartExport += PowerInputs[_Channel].Data.PowerActiv * Factor;
+            if (PowerInputs[_Channel].Data.PartExport >= 1.0) {
+              uint32_t PartAdd = (uint32_t) PowerInputs[_Channel].Data.PartExport;
+              DeviceCounter.Counters[_Channel].Export += PartAdd;
+              PowerInputs[_Channel].Data.PartExport -= (float)PartAdd;
+            }
+          }
+        }
+        PowerInputs[_Channel].Data.FirstDone = true;
+        PowerInputs[_Channel].Data.LastRead = PowerInputs[_Channel].RawData.StartRead;
       }
     }
 

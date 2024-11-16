@@ -13,8 +13,13 @@ namespace JCA {
       if (info->final && info->index == 0 && info->len == _Len && info->opcode == WS_TEXT) {
         JsonDocument JCmdDoc;
         deserializeJson (JCmdDoc, _Data);
-        JsonObject Cmd = JCmdDoc.to<JsonObject> ();
-        getCommands (_JData, Cmd);
+        JsonObject Data = JCmdDoc.to<JsonObject> ();
+        if (Data["cmd"].is<JsonObject>()){
+          setCommands (_JData, Data["cmd"].as<JsonObject> ());
+        }
+        if (Data["config"].is<JsonObject>()){
+          setConfig (_JData, Data["config"].as<JsonObject> ());
+        }
       }
     }
 
