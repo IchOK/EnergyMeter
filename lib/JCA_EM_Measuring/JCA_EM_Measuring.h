@@ -13,7 +13,7 @@
 
 #define JCA_EM_VOLTAGE_SENSES 1
 #define JCA_EM_CURRENT_SENSES 8
-#define JCA_EM_SAMPLEPERIODES 2
+#define JCA_EM_SAMPLEPERIODES 4
 #define JCA_EM_SAMPLES_PERPEROIDE 50
 #define JCA_EM_SAMPLECOUNT (JCA_EM_SAMPLEPERIODES * JCA_EM_SAMPLES_PERPEROIDE)
 #define JCA_EM_STORAGENAME "JcaEm"
@@ -75,6 +75,13 @@ namespace JCA {
         float PartExport;       // Erzeugte Energie [Wh] - Kommastellen
         bool FirstDone;
         unsigned long LastRead;
+        #ifdef JCA_EM_DEBUG
+        int16_t U[JCA_EM_SAMPLES_PERPEROIDE];
+        int16_t I[JCA_EM_SAMPLES_PERPEROIDE];
+        int64_t Usum;
+        int64_t Isum;
+        int64_t Psum;
+        #endif
       } Data;
       struct {
         uint16_t Current[JCA_EM_SAMPLECOUNT];
@@ -86,7 +93,8 @@ namespace JCA {
     typedef std::function<void (JsonObject Data)> JsonObjectCallback;
 
     // _Calc.cpp
-    int16_t getMeanValue (int16_t Samples[], uint8_t Count);
+    int16_t getMeanValue (int16_t _Samples[], uint8_t _Count);
+    int64_t getSqSumMean (uint16_t _Samples[], uint16_t _Count, uint8_t _Periodes, uint16_t _Offset);
     void calcData (uint8_t _Channel);
 
     // _Interface.cpp

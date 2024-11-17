@@ -151,6 +151,17 @@ namespace JCA {
           DataObj["PowerActiv"] = PowerInputs[i].Data.PowerActiv;
           DataObj["PowerReactiv"] = PowerInputs[i].Data.PowerReactiv;
           DataObj["PowerFactor"] = PowerInputs[i].Data.PowerFactor;
+          #ifdef JCA_EM_DEBUG
+          DataObj["Usum"] = PowerInputs[i].Data.Usum;
+          DataObj["Isum"] = PowerInputs[i].Data.Isum;
+          DataObj["Psum"] = PowerInputs[i].Data.Psum;
+          JsonArray UArr = DataObj["U"].to<JsonArray>();
+          JsonArray IArr = DataObj["I"].to<JsonArray>();
+          for (int x = 0; x < JCA_EM_SAMPLES_PERPEROIDE; x++) {
+            UArr.add(PowerInputs[i].Data.U[x]);
+            IArr.add(PowerInputs[i].Data.I[x]);
+          }
+          #endif
 
           JsonObject CounterObj = ChannelObj["cnt"].to<JsonObject>();
           CounterObj["Import"] = DeviceCounter.Counters[i].Import;

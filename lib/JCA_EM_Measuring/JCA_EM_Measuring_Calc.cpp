@@ -7,12 +7,32 @@ namespace JCA {
     extern DeviceCounter_T DeviceCounter;
     extern PowerInput_T PowerInputs[JCA_EM_CURRENT_SENSES];
 
-    int16_t getMeanValue(int16_t Samples[], uint8_t Count) {
+    int16_t getMeanValue(int16_t _Samples[], uint8_t _Count) {
       int32_t Sum = 0;
-      for (int i = 0; i < Count; i++) {
-        Sum += Samples[i];
+      for (int i = 0; i < _Count; i++) {
+        Sum += _Samples[i];
       }
-      return Sum /Count;
+      return Sum /_Count;
+    }
+
+    int64_t getSqSumMean (uint16_t _Samples[], uint16_t _Count, uint8_t _Periodes, uint16_t _Offset) {
+      int64_t SqSumValue = 0;
+      uint32_t SumValue;
+      int16_t ActValue;
+      uint16_t PCount = _Count / _Periodes;
+      if (_Count % _Periodes == 0) {
+        for (int i = 0; i < PCount; i++) {
+          SumValue = 0;
+          for (int x = 0; x < _Periodes; x++) {
+            SumValue += _Samples[i + x * PCount];
+          }
+          ActValue = (uint16_t)(SumValue / _Periodes) - _Offset;
+          SqSumValue += sq(ActValue);
+        }
+        return SqSumValue;
+      } else {
+        return 0;
+      }
     }
 
     void calcData(uint8_t _Channel) {
@@ -24,12 +44,6 @@ namespace JCA {
       float FactorVoltage;
       uint8_t MapIndex;
 
-      float U;  // Spannung am Messpunkt
-      float I;  // Strom am Messpunkt
-      float Usum; // Aufsummierte quadratische Spannung
-      float Isum; // Aufsummierter quadratischer Strom
-      float Psum; // Aufsummierte Wirkleistung
-      
       if (PowerInputs[_Channel].Valid) {
         MapIndex = DeviceConfig.CurrentMapping[_Channel];
         OffsetVoltage = DeviceConfig.VoltageInputs[MapIndex].Offset;
@@ -37,21 +51,68 @@ namespace JCA {
         OffsetCurrent = DeviceConfig.CurrentInputs[_Channel].Offset;
         FactorCurrent = DeviceConfig.CurrentInputs[_Channel].Factor;
 
-        Usum = 0.0;
-        Isum = 0.0;
-        Psum = 0.0;
-        for (int x = 0; x < JCA_EM_SAMPLECOUNT; x++) {
-          U = float(PowerInputs[_Channel].RawData.Voltage[x] - OffsetVoltage) * FactorVoltage;
-          I = float(PowerInputs[_Channel].RawData.Current[x] - OffsetCurrent) * FactorCurrent;
+//        float U;    // Spannung am Messpunkt
+//        float I;    // Strom am Messpunkt
+//        float Usum; // Aufsummierte quadratische Spannung
+//        float Isum; // Aufsummierter quadratischer Strom
+//        float Psum; // Aufsummierte Wirkleistung
+//        Usum = 0.0;
+//        Isum = 0.0;
+//        Psum = 0.0;
+//        for (int x = 0; x < JCA_EM_SAMPLECOUNT; x++) {
+//          U = (float)(PowerInputs[_Channel].RawData.Voltage[x] - OffsetVoltage) * FactorVoltage;
+//          I = (float)(PowerInputs[_Channel].RawData.Current[x] - OffsetCurrent) * FactorCurrent;
+//          Usum += sq(U);
+//          Isum += sq(I);
+//          Psum += U * I;
+//        }
+//        PowerInputs[_Channel].Data.VoltageRMS = sqrt (Usum / JCA_EM_SAMPLECOUNT);
+//        PowerInputs[_Channel].Data.CurrentRMS = sqrt (Isum / JCA_EM_SAMPLECOUNT);
+//        PowerInputs[_Channel].Data.Power = PowerInputs[_Channel].Data.VoltageRMS * PowerInputs[_Channel].Data.CurrentRMS;
+//        PowerInputs[_Channel].Data.PowerActiv = Psum / JCA_EM_SAMPLECOUNT;
+//        PowerInputs[_Channel].Data.PowerReactiv = sqrt(sq(PowerInputs[_Channel].Data.Power) - sq(PowerInputs[_Channel].Data.PowerActiv));
+//        PowerInputs[_Channel].Data.PowerFactor = PowerInputs[_Channel].Data.PowerActiv / PowerInputs[_Channel].Data.Power;
+//        PowerInputs[_Channel].Data.VoltageRMS = sqrt (Usum / JCA_EM_SAMPLES_PERPEROIDE);
+//        PowerInputs[_Channel].Data.CurrentRMS = sqrt (Isum / JCA_EM_SAMPLES_PERPEROIDE);
+//        PowerInputs[_Channel].Data.Power = PowerInputs[_Channel].Data.VoltageRMS * PowerInputs[_Channel].Data.CurrentRMS;
+//        PowerInputs[_Channel].Data.PowerActiv = Psum / JCA_EM_SAMPLES_PERPEROIDE;
+//        PowerInputs[_Channel].Data.PowerReactiv = sqrt(sq(PowerInputs[_Channel].Data.Power) - sq(PowerInputs[_Channel].Data.PowerActiv));
+//        PowerInputs[_Channel].Data.PowerFactor = PowerInputs[_Channel].Data.PowerActiv / PowerInputs[_Channel].Data.Power;
+
+        int16_t U;    // Spannung am Messpunkt
+        int16_t I;    // Strom am Messpunkt
+        int64_t Usum; // Aufsummierte quadratische Spannung
+        int64_t Isum; // Aufsummierter quadratischer Strom
+        int64_t Psum; // Aufsummierte Wirkleistung
+        Usum = 0;
+        Isum = 0;
+        Psum = 0;
+        for (int x = 0; x < JCA_EM_SAMPLES_PERPEROIDE; x++) {
+          uint32_t SumU = 0;
+          uint32_t SumI = 0;
+          for (int y = 0; y < JCA_EM_SAMPLEPERIODES; y ++) {
+            SumU += PowerInputs[_Channel].RawData.Voltage[x + y * JCA_EM_SAMPLES_PERPEROIDE];
+            SumI += PowerInputs[_Channel].RawData.Current[x + y * JCA_EM_SAMPLES_PERPEROIDE];
+          }
+          U = (uint16_t)(SumU / JCA_EM_SAMPLEPERIODES) - OffsetVoltage;
+          I = (uint16_t)(SumI / JCA_EM_SAMPLEPERIODES) - OffsetCurrent;
+          #ifdef JCA_EM_DEBUG
+          PowerInputs[_Channel].Data.U[x] = U;
+          PowerInputs[_Channel].Data.I[x] = I;
+          #endif
           Usum += sq(U);
           Isum += sq(I);
           Psum += U * I;
         }
-
-        PowerInputs[_Channel].Data.VoltageRMS = sqrt (Usum / JCA_EM_SAMPLECOUNT);
-        PowerInputs[_Channel].Data.CurrentRMS = sqrt (Isum / JCA_EM_SAMPLECOUNT);
+        #ifdef JCA_EM_DEBUG
+        PowerInputs[_Channel].Data.Usum = Usum;
+        PowerInputs[_Channel].Data.Isum = Isum;
+        PowerInputs[_Channel].Data.Psum = Psum;
+        #endif
+        PowerInputs[_Channel].Data.VoltageRMS = sqrt ((float)Usum / JCA_EM_SAMPLES_PERPEROIDE) * FactorVoltage;
+        PowerInputs[_Channel].Data.CurrentRMS = sqrt ((float)Isum / JCA_EM_SAMPLES_PERPEROIDE) * FactorCurrent;
         PowerInputs[_Channel].Data.Power = PowerInputs[_Channel].Data.VoltageRMS * PowerInputs[_Channel].Data.CurrentRMS;
-        PowerInputs[_Channel].Data.PowerActiv = Psum / JCA_EM_SAMPLECOUNT;
+        PowerInputs[_Channel].Data.PowerActiv = Psum * FactorVoltage * FactorCurrent / JCA_EM_SAMPLES_PERPEROIDE;
         PowerInputs[_Channel].Data.PowerReactiv = sqrt(sq(PowerInputs[_Channel].Data.Power) - sq(PowerInputs[_Channel].Data.PowerActiv));
         PowerInputs[_Channel].Data.PowerFactor = PowerInputs[_Channel].Data.PowerActiv / PowerInputs[_Channel].Data.Power;
 

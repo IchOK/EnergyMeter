@@ -1,3 +1,5 @@
+//#define JCA_EM_DEBUG
+
 #include <Arduino.h>
 #include <FreeRTOS.h>
 
@@ -52,7 +54,9 @@ void onRestGetTasks(AsyncWebServerRequest *request) {
 void setup (){
   WiFi.mode (WIFI_STA);
   delay (1000);
-//  Serial.begin (115200);
+  #ifdef JCA_EM_DEBUG
+  Serial.begin (115200);
+  #endif
   Serial.println ("Startup)");
 
   //----------------------------

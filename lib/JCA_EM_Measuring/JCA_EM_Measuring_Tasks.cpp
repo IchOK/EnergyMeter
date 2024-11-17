@@ -151,6 +151,7 @@ namespace JCA {
       uint16_t Counter;
       unsigned long ActMicros;
       unsigned long LastRead;
+      uint16_t Samples[JCA_EM_CAL_PERIODES * JCA_EM_SAMPLES_PERPEROIDE];
 
       CalDone = false;
       //----------------------------
@@ -166,8 +167,7 @@ namespace JCA {
           LastRead = ActMicros - DeviceConfig.SampleRate;
           while (Counter < SampleCount) {
             if (ActMicros - LastRead >= DeviceConfig.SampleRate) {
-              ActValue = (int64_t)analogRead (Pin) - Offset;
-              SumValue += sq(ActValue);
+              Samples[Counter] = analogRead (Pin);
               Counter++;
               LastRead = ActMicros;
             }
@@ -175,7 +175,8 @@ namespace JCA {
           }
 
           // RMS-Wert berechnen und Kallibrierungsfaktor speichern speichern
-          DeviceConfig.VoltageInputs[i].Factor = Cal_VoltageRMS / sqrt((float)SumValue / (float)SampleCount);
+          SumValue = getSqSumMean(Samples, SampleCount, JCA_EM_CAL_PERIODES, Offset);
+          DeviceConfig.VoltageInputs[i].Factor = Cal_VoltageRMS / sqrt((float)SumValue / (float)JCA_EM_SAMPLES_PERPEROIDE);
 
           // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
           vTaskDelay (200U);
@@ -195,8 +196,7 @@ namespace JCA {
           LastRead = ActMicros - DeviceConfig.SampleRate;
           while (Counter < SampleCount) {
             if (ActMicros - LastRead >= DeviceConfig.SampleRate) {
-              ActValue = (int64_t)analogRead (Pin) - Offset;
-              SumValue += sq(ActValue);
+              Samples[Counter] = analogRead (Pin);
               Counter++;
               LastRead = ActMicros;
             }
@@ -204,7 +204,8 @@ namespace JCA {
           }
 
           // RMS-Wert berechnen und Kallibrierungsfaktor speichern speichern
-          DeviceConfig.CurrentInputs[i].Factor = Cal_CurrentRMS / sqrt((float)SumValue / (float)SampleCount);
+          SumValue = getSqSumMean(Samples, SampleCount, JCA_EM_CAL_PERIODES, Offset);
+          DeviceConfig.CurrentInputs[i].Factor = Cal_CurrentRMS / sqrt((float)SumValue / (float)JCA_EM_SAMPLES_PERPEROIDE);
 
           // Kurz werten um anderen Tasks die Möglichkeit zur ausführung zu geben
           vTaskDelay (200U);
